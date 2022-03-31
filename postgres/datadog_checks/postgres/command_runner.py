@@ -1,4 +1,5 @@
 import psycopg2
+from cachetools import TTLCache
 
 try:
     import datadog_agent
@@ -9,7 +10,7 @@ from datadog_checks.base.utils.db.utils import (
     DBMAsyncJob,
 )
 
-commands = [
+REMOTE_COMMANDS = [
     {
         "command_id": 1,
         "command_type": "kill_query",
@@ -36,11 +37,24 @@ class PostgresCommandRunner(DBMAsyncJob):
         )
         self._check = check
         self._config = config
+        self._command_cache = TTLCache(
+            maxsize=1000,
+            ttl=600
+        )
 
     def _get_commands(self):
         self._log.info("fetching agent commands")
-        # filter commands for correct host here
-        return commands
+        valid_commands = []
+        for c in REMOTE_COMMANDS:
+            if c['host'] != self._config.host:
+                self._log.warn("wrong host, skipping command. expected host=%s got host=%s", self._config.host, c['host'])
+                continue
+            if c['command_id'] in self._command_cache:
+                self._log.info("skipping already executed command_id=%s", c['command_id'])
+                continue
+            self._command_cache[c['command_id']] = True
+            valid_commands.append(c)
+        return valid_commands
 
     def _kill_query(self, pid):
         self._log.info("killing postgres pid. pid=%s", pid)
@@ -61,3 +75,9 @@ class PostgresCommandRunner(DBMAsyncJob):
                 self._explain_analyze(command['query_signature'])
             else:
                 self._log.error("invalid command_type: %s", command)
+            self._check.count(
+                "dd.postgres.command_run.run",
+                1,
+                tags=self._tags + ["command_type:{}".format(command['command_type'])] + self._check._get_debug_tags(),
+                hostname=self._check.resolved_hostname,
+            )
