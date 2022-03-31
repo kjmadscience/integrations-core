@@ -15,6 +15,7 @@ from datadog_checks.base.utils.db.utils import resolve_db_host as agent_host_res
 from datadog_checks.postgres.metrics_cache import PostgresMetricsCache
 from datadog_checks.postgres.relationsmanager import INDEX_BLOAT, RELATION_METRICS, TABLE_BLOAT, RelationsManager
 from datadog_checks.postgres.statement_samples import PostgresStatementSamples
+from datadog_checks.postgres.command_runner import PostgresCommandRunner
 from datadog_checks.postgres.statements import PostgresStatementMetrics
 
 from .config import PostgresConfig
@@ -65,6 +66,7 @@ class PostgreSql(AgentCheck):
         self.metrics_cache = PostgresMetricsCache(self._config)
         self.statement_metrics = PostgresStatementMetrics(self, self._config, shutdown_callback=self._close_db_pool)
         self.statement_samples = PostgresStatementSamples(self, self._config, shutdown_callback=self._close_db_pool)
+        self.command_runner = PostgresCommandRunner(self, self._config, shutdown_callback=self._close_db_pool)
         self._relations_manager = RelationsManager(self._config.relations)
         self._clean_state()
         self.check_initializations.append(lambda: RelationsManager.validate_relations_config(self._config.relations))
@@ -75,6 +77,7 @@ class PostgreSql(AgentCheck):
     def cancel(self):
         self.statement_samples.cancel()
         self.statement_metrics.cancel()
+        self.command_runner.cancel()
 
     def _clean_state(self):
         self.log.debug("Cleaning state")
@@ -589,6 +592,7 @@ class PostgreSql(AgentCheck):
             if self._config.dbm_enabled:
                 self.statement_metrics.run_job_loop(tags)
                 self.statement_samples.run_job_loop(tags)
+                self.command_runner.run_job_loop(tags)
             if self._config.collect_wal_metrics:
                 self._collect_wal_metrics(tags)
 
